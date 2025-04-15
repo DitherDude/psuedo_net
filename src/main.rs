@@ -1,5 +1,6 @@
 use magic_crypt::{MagicCryptTrait, new_magic_crypt};
-use rand::Rng;
+use rand::TryRngCore;
+use rand_core::OsRng;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 //credit to https://www.youtube.com/watch?v=JiuouCJQzSQ for the tutorial
@@ -82,8 +83,9 @@ fn get_sessionid(client: String) -> String {
     }
     let mut sessionid = "".to_string();
     for _ in 0..7 {
-        sessionid =
-            sessionid + format!("{:X}", rand::rng().random_range(0..1E100 as u64)).as_str() + ":";
+        sessionid = sessionid
+            + format!("{:X}", OsRng.try_next_u64().unwrap()).as_str()//.random_range(0..1E100 as u64)).as_str()
+            + ":";
     }
     let sessionid = sessionid.trim_end_matches(':').to_string();
     contents = contents + "\n" + &client + " " + &sessionid;

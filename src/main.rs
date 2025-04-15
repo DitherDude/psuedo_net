@@ -105,5 +105,5 @@ fn remove_client(client: String) {
         }
     }
     file = std::fs::File::create("sessionid.txt").unwrap();
-    file.write_all(new_contents.as_bytes()).unwrap();
+    file.write_all(new_contents.trim().as_bytes()).unwrap();
 }

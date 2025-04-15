@@ -84,7 +84,6 @@ fn get_sessionid(client: String) -> String {
     let mut sessionid = "".to_string();
     for _ in 0..7 {
         sessionid = sessionid
-            //+ format!("{:X}", OsRng.try_next_u64().unwrap()).as_str()//.random_range(0..1E100 as u64)).as_str()
             + format!("{:X}", StdRng::try_next_u64(&mut StdRng::from_os_rng()).unwrap()).as_str()//.random_range(0..1E100 as u64)).as_str()
             + ":";
     }

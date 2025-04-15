@@ -1,6 +1,4 @@
-use std::io;
-use std::io::prelude::*;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write, prelude::*};
 use std::net::TcpStream;
 use magic_crypt::{new_magic_crypt, MagicCryptTrait};
 

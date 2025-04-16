@@ -23,6 +23,10 @@ fn main() {
     };
     let stdin = io::stdin();
     match sessionid.as_str() {
+        "offline" => {
+            eprintln!("Server unreachable.");
+            return;
+        }
         "err" => {
             eprintln!("Server expects a preexisting session ID.");
             return;
@@ -46,7 +50,7 @@ fn main() {
         let line = ln.unwrap().to_string();
         let mc = new_magic_crypt!(&sessionid, 256);
         let encrypted_string = mc.encrypt_str_to_base64(&line);
-        match sendrequest(encrypted_string).trim_end_matches('\0') {
+        match sendrequest("b".to_string() + &encrypted_string).trim_end_matches('\0') {
             "Disconnected Successfully" => {
                 println!("Server has terminated the connection.");
                 return;
@@ -65,7 +69,7 @@ fn sendrequest(line: String) -> String {
     return String::from_utf8_lossy(&buffer[..]).to_string();
         },
         Err(_) => {
-            return "err".to_string();
+            return "offline".to_string();
         },
     };
     

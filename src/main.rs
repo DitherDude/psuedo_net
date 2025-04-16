@@ -35,14 +35,22 @@ fn handle_connection(mut stream: TcpStream) {
     stream
         .read(&mut buffer)
         .expect("[ERROR] Received connection from client, but lost request.");
-    match String::from_utf8_lossy(&buffer[..]).trim_end_matches('\0') {
-        "`" => {
+    let response = String::from_utf8_lossy(&buffer[..])
+        .trim_end_matches('\0')
+        .to_string();
+    match response.chars().nth(0).unwrap() {
+        '`' => {
             stream
                 .write(gen_sessionid(clientid).as_bytes())
                 .expect("[ERROR] Connected to client, but failed to send session ID.");
         }
         x => {
-            match decrypt(x.to_string(), get_sessionid(clientid.clone())).as_str() {
+            match decrypt(
+                x.to_string().trim_start_matches('b').to_string(),
+                get_sessionid(clientid.clone()),
+            )
+            .as_str()
+            {
                 "disconnect" => {
                     remove_client(clientid.clone());
                     stream

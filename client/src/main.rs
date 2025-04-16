@@ -22,18 +22,21 @@ fn main() {
             }
             contents.to_string()
         }
-        None => send_request("`".to_string())
+        None => {let mut tmpid = send_request("`".to_string())
             .trim_end_matches('\0')
-            .to_string(),
+            .to_string();
+        if tmpid == "err"{
+            tmpid = login();
+        }
+        tmpid},
     };
-    let stdin = io::stdin();
     match sessionid.as_str() {
         "offline" => {
             eprintln!("Server unreachable.");
             return;
         }
         "err" => {
-            eprintln!("Server expects a preexisting session ID.");
+            eprintln!("Server expects a preexisting session ID, and login failed.");
             return;
         }
         _ => (),
@@ -44,32 +47,10 @@ fn main() {
             "b".to_string() + &new_magic_crypt!(&sessionid, 256).encrypt_str_to_base64("verify")
         ))
     );
+    let stdin = io::stdin();
     for ln in stdin.lock().lines() {
         let line = ln.unwrap().to_string();
         match line.as_str() {
-            "login" => {
-                let request_rsa = std::thread::spawn(move || {
-                    send_request("$".to_string())
-                        .trim_end_matches('\0')
-                        .to_string()
-                });
-                //println!("Username: ");
-                let mut username = String::new();
-                //std::io::stdin().read_line(&mut username).unwrap();
-                //let username = username.trim_end_matches('\n').to_string();
-                let username = "username".to_string();
-                println!("Waiting for server to send RSA key...");
-                let rsa_key = request_rsa.join().unwrap().replace("*", "\n");
-                println!("RSA key received.: {}", rsa_key);
-                let mut rng = rand::rngs::OsRng;
-                let public_key = RsaPublicKey::from_public_key_pem(&rsa_key.as_str()).unwrap();
-                let cyphertext_bytes = public_key
-                    .encrypt(&mut rng, Pkcs1v15Encrypt, &username.as_bytes())
-                    .unwrap();
-                handle_request(send_request(
-                    "r".to_string() + &general_purpose::STANDARD.encode(cyphertext_bytes),
-                ));
-            }
             _ => {
                 let mc = new_magic_crypt!(&sessionid, 256);
                 let encrypted_string = mc.encrypt_str_to_base64(&line);
@@ -80,6 +61,43 @@ fn main() {
             }
         }
     }
+}
+
+fn login() -> String{
+    let request_rsa = std::thread::spawn(move || {
+        send_request("$".to_string())
+            .trim_end_matches('\0')
+            .to_string()
+    });
+    let stdin = io::stdin();
+    print!("Username: ");
+    io::stdout().flush().unwrap();
+    let mut username = String::new();
+    stdin.lock().read_line(&mut username).unwrap();
+    let username = username.trim().to_string();
+    print!("Password: ");
+    io::stdout().flush().unwrap();
+    let mut password = String::new();
+    stdin.lock().read_line(&mut password).unwrap();
+    println!("\x1B[1A\x1B[2KPassword:");
+    let password = password.trim().to_string();
+    //let username = "username".to_string();
+    print!("Waiting for server to send RSA key...");
+    io::stdout().flush().unwrap();
+    let rsa_key = request_rsa.join().unwrap().replace("*", "\n");
+    println!("RSA key received.");
+    let cleartext = username + ":" + &password;
+    let mut rng = rand::rngs::OsRng;
+    let public_key = RsaPublicKey::from_public_key_pem(&rsa_key.as_str()).unwrap();
+    let cyphertext = public_key.encrypt(&mut rng, Pkcs1v15Encrypt, cleartext.as_bytes()).unwrap();
+    let sessionid = send_request(
+        "r".to_string() + &general_purpose::STANDARD.encode(cyphertext),
+    ).trim_end_matches('\0').to_string();
+    if sessionid == "err" {
+        return "err".to_string();
+    }
+    let mc = new_magic_crypt!(&password, 256);
+    return mc.decrypt_base64_to_string(&sessionid).unwrap();
 }
 
 fn send_request(line: String) -> String {
@@ -97,7 +115,7 @@ fn send_request(line: String) -> String {
 }
 
 fn handle_request(request: String) -> String {
-    let mut response = String::new();
+    let response: String;
     match request.trim_end_matches('\0') {
         "Invalid Session ID" => {
             eprintln!(

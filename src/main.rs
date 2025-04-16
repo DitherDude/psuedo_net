@@ -67,6 +67,22 @@ fn handle_connection(mut stream: TcpStream) {
                         .decrypt(Pkcs1v15Encrypt, &cyphertext_bytes)
                         .unwrap();
                     data = String::from_utf8(cleartext_bytes).unwrap();
+                    if data == "admin:Passw0rd" {
+                        println!("[INFO] Admin {} connected.", clientid);
+                        let mc = new_magic_crypt!("Passw0rd", 256);
+                        let mut sessionid = get_sessionid(clientid.clone());
+                        if sessionid == "err" {
+                            sessionid = gen_sessionid(clientid.clone());
+                        }
+                        let encrypted_string = mc.encrypt_str_to_base64(sessionid);
+                        stream.write(encrypted_string.as_bytes()).expect(
+                            "[ERROR] Connected to client, but failed to send encrypted session ID.",
+                        );
+                    } else {
+                        stream
+                            .write("err".as_bytes())
+                            .expect("[ERROR] Connected to client, but failed to send response.");
+                    }
                 }
                 _ => {
                     data = "err".to_string();
@@ -93,7 +109,7 @@ fn handle_connection(mut stream: TcpStream) {
                         _ => "unknown",
                     };
                     println!(
-                        "Received request \"{}\" from {} via {}!",
+                        "[INFO] Received \"{}\" from {} via {}!",
                         data, clientid, protocol
                     );
                 }
@@ -199,6 +215,7 @@ fn get_rsa_key(client: String) -> String {
 }
 
 fn gen_rsa_key(client: String) -> String {
+    println!("[INFO] Generating RSA key for client {}...", client);
     if !std::fs::metadata("rsakeys.txt").is_ok() {
         std::fs::File::create("rsakeys.txt").unwrap();
     }
@@ -226,6 +243,6 @@ fn gen_rsa_key(client: String) -> String {
     file = std::fs::File::create("rsakeys.txt").unwrap();
     file.write_all(contents.replace("\n\n", "\n").as_bytes())
         .unwrap();
-    println!("[INFO] New client {} connected.", client);
+    println!("[INFO] RSA key generated for client {}.", client);
     return pub_str;
 }

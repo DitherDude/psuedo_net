@@ -84,6 +84,7 @@ dependencies = [
 name = "client"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "magic-crypt",
  "rand",
  "rsa",

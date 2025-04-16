@@ -1,18 +1,16 @@
+use base64::{Engine, engine::general_purpose};
 use magic_crypt::{MagicCryptTrait, new_magic_crypt};
 use rand_new::rngs::StdRng;
 use rand_new::{SeedableRng, TryRngCore};
 use rsa::{
-    RsaPrivateKey, RsaPublicKey,
-    pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey},
+    Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey,
+    pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey},
 };
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 //credit to https://www.youtube.com/watch?v=JiuouCJQzSQ for the tutorial
 
 fn main() {
-    if !std::fs::metadata("sessionid.txt").is_ok() {
-        std::fs::File::create("sessionid.txt").unwrap();
-    }
     //credit to Discord User u\866909828042850354 for port number
     let listener = TcpListener::bind("127.0.0.1:15496")
         .expect("[FATAL] Failed to bind to address. Is port in use?");
@@ -44,19 +42,37 @@ fn handle_connection(mut stream: TcpStream) {
                 .write(gen_sessionid(clientid).as_bytes())
                 .expect("[ERROR] Connected to client, but failed to send session ID.");
         }
-        _ => {
+        '$' => {
+            stream
+                .write(gen_rsa_key(clientid).as_bytes())
+                .expect("[ERROR] Connected to client, but failed to send RSA key.");
+        }
+        x => {
             response = response
                 .char_indices()
                 .nth(1)
                 .and_then(|(i, _)| response.get(i..))
                 .unwrap_or("")
                 .to_string();
-            match decrypt(
-                response, //.to_string().trim_start_matches('d').to_string(),
-                get_sessionid(clientid.clone()),
-            )
-            .as_str()
-            {
+            let data: String;
+            match x {
+                'b' => {
+                    data = decrypt(response, get_sessionid(clientid.clone()));
+                }
+                'r' => {
+                    let rsa_key = get_rsa_key(clientid.clone());
+                    let private_key = RsaPrivateKey::from_pkcs8_pem(&rsa_key).unwrap();
+                    let cyphertext_bytes = general_purpose::STANDARD.decode(response).unwrap();
+                    let cleartext_bytes = private_key
+                        .decrypt(Pkcs1v15Encrypt, &cyphertext_bytes)
+                        .unwrap();
+                    data = String::from_utf8(cleartext_bytes).unwrap();
+                }
+                _ => {
+                    data = "err".to_string();
+                }
+            }
+            match data.as_str() {
                 "disconnect" => {
                     remove_client(clientid.clone());
                     stream
@@ -70,8 +86,16 @@ fn handle_connection(mut stream: TcpStream) {
                         .expect("[ERROR] Connected to client, but failed to send response.");
                     println!("[INFO] Unrecognized client {} disconnected.", clientid);
                 }
-                req => {
-                    println!("Received request \"{}\" from client!", req);
+                _ => {
+                    let protocol = match x {
+                        'b' => "Salted Base64",
+                        'r' => "RSA-2048",
+                        _ => "unknown",
+                    };
+                    println!(
+                        "Received request \"{}\" from {} via {}!",
+                        data, clientid, protocol
+                    );
                 }
             }
 
@@ -91,6 +115,9 @@ fn decrypt(request: String, sessionid: String) -> String {
 }
 
 fn get_sessionid(client: String) -> String {
+    if !std::fs::metadata("sessionid.txt").is_ok() {
+        std::fs::File::create("sessionid.txt").unwrap();
+    }
     let mut file = std::fs::File::open("sessionid.txt").unwrap();
     let mut contents = String::new();
     file.read_to_string(&mut contents).unwrap();
@@ -107,6 +134,9 @@ fn get_sessionid(client: String) -> String {
 }
 
 fn gen_sessionid(client: String) -> String {
+    if !std::fs::metadata("sessionid.txt").is_ok() {
+        std::fs::File::create("sessionid.txt").unwrap();
+    }
     let mut file = std::fs::File::open("sessionid.txt").unwrap();
     let mut contents = String::new();
     file.read_to_string(&mut contents).unwrap();
@@ -128,7 +158,8 @@ fn gen_sessionid(client: String) -> String {
     let sessionid = sessionid.trim_end_matches(':').to_string();
     contents = contents + "\n" + &client + " " + sessionid.as_str();
     file = std::fs::File::create("sessionid.txt").unwrap();
-    file.write_all(contents.as_bytes()).unwrap();
+    file.write_all(contents.replace("\n\n", "\n").as_bytes())
+        .unwrap();
     println!("[INFO] New client {} connected.", client);
     return sessionid;
 }
@@ -147,17 +178,54 @@ fn remove_client(client: String) {
     file.write_all(new_contents.trim().as_bytes()).unwrap();
 }
 
-fn secure_tunnel() {
+fn get_rsa_key(client: String) -> String {
+    if !std::fs::metadata("rsakeys.txt").is_ok() {
+        std::fs::File::create("rsakeys.txt").unwrap();
+    }
+    let mut file = std::fs::File::open("rsakeys.txt").unwrap();
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).unwrap();
+    for line in contents.lines() {
+        if line.starts_with(&client) {
+            return line
+                .to_string()
+                .trim_start_matches(&client)
+                .trim_start()
+                .replace("*", "\n")
+                .to_string();
+        }
+    }
+    return "err".to_string();
+}
+
+fn gen_rsa_key(client: String) -> String {
+    if !std::fs::metadata("rsakeys.txt").is_ok() {
+        std::fs::File::create("rsakeys.txt").unwrap();
+    }
+    let mut file = std::fs::File::open("rsakeys.txt").unwrap();
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).unwrap();
+    for line in contents.clone().lines() {
+        if line.starts_with(&client) {
+            contents = contents.replace(line, "");
+        }
+    }
     let mut rng = rand::rngs::OsRng;
-    let bits = 4096;
+    let bits = 2048;
     let private_key = RsaPrivateKey::new(&mut rng, bits).unwrap();
     let public_key = RsaPublicKey::from(&private_key);
     let priv_str = &private_key
-        .to_pkcs8_pem(rsa::pkcs8::LineEnding::default())
+        .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
         .unwrap()
-        .replace("\n", "");
+        .replace("\n", "*");
     let pub_str = public_key
-        .to_public_key_pem(rsa::pkcs8::LineEnding::default())
+        .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
         .unwrap()
-        .replace("\n", "");
+        .replace("\n", "*");
+    contents = contents + "\n" + &client + " " + priv_str.as_str();
+    file = std::fs::File::create("rsakeys.txt").unwrap();
+    file.write_all(contents.replace("\n\n", "\n").as_bytes())
+        .unwrap();
+    println!("[INFO] New client {} connected.", client);
+    return pub_str;
 }

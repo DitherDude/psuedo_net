@@ -1,7 +1,10 @@
+use base64::{Engine, engine::general_purpose};
 use magic_crypt::{MagicCryptTrait, new_magic_crypt};
+use rsa::{Pkcs1v15Encrypt, RsaPublicKey, pkcs8::DecodePublicKey};
 use std::env;
 use std::io::{self, Read, Write, prelude::*};
 use std::net::TcpStream;
+use std::process;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -19,7 +22,7 @@ fn main() {
             }
             contents.to_string()
         }
-        None => sendrequest("`".to_string())
+        None => send_request("`".to_string())
             .trim_end_matches('\0')
             .to_string(),
     };
@@ -35,48 +38,51 @@ fn main() {
         }
         _ => (),
     }
-    match sendrequest(
-        "b".to_string() + &new_magic_crypt!(&sessionid, 256).encrypt_str_to_base64("verify"),
-    )
-    .trim_end_matches('\0')
-    {
-        "Invalid Session ID" => {
-            eprintln!(
-                "Server could not verify the integrity of this connection, and thus terminated it."
-            );
-            return;
-        }
-        "offline" => {
-            eprintln!("Server unreachable.");
-            return;
-        }
-        _ => {
-            println!("Connected to server",);
-        }
-    }
+    println!(
+        "{}",
+        handle_request(send_request(
+            "b".to_string() + &new_magic_crypt!(&sessionid, 256).encrypt_str_to_base64("verify")
+        ))
+    );
     for ln in stdin.lock().lines() {
-        //let line = "b".to_string() + &ln.unwrap();//.to_string();
         let line = ln.unwrap().to_string();
-        let mc = new_magic_crypt!(&sessionid, 256);
-        let encrypted_string = mc.encrypt_str_to_base64(&line);
-        match sendrequest("b".to_string() + &encrypted_string).trim_end_matches('\0') {
-            "Disconnected Successfully" => {
-                println!("Server has terminated the connection.");
-                return;
+        match line.as_str() {
+            "login" => {
+                let request_rsa = std::thread::spawn(move || {
+                    send_request("$".to_string())
+                        .trim_end_matches('\0')
+                        .to_string()
+                });
+                //println!("Username: ");
+                let mut username = String::new();
+                //std::io::stdin().read_line(&mut username).unwrap();
+                //let username = username.trim_end_matches('\n').to_string();
+                let username = "username".to_string();
+                println!("Waiting for server to send RSA key...");
+                let rsa_key = request_rsa.join().unwrap().replace("*", "\n");
+                println!("RSA key received.: {}", rsa_key);
+                let mut rng = rand::rngs::OsRng;
+                let public_key = RsaPublicKey::from_public_key_pem(&rsa_key.as_str()).unwrap();
+                let cyphertext_bytes = public_key
+                    .encrypt(&mut rng, Pkcs1v15Encrypt, &username.as_bytes())
+                    .unwrap();
+                handle_request(send_request(
+                    "r".to_string() + &general_purpose::STANDARD.encode(cyphertext_bytes),
+                ));
             }
-            "offline" => {
-                eprintln!("Server unreachable.");
-                return;
+            _ => {
+                let mc = new_magic_crypt!(&sessionid, 256);
+                let encrypted_string = mc.encrypt_str_to_base64(&line);
+                println!(
+                    "{}",
+                    handle_request(send_request("b".to_string() + &encrypted_string))
+                );
             }
-            "Connected Successfully" => {
-                println!("Server successfully handled request.");
-            }
-            x => println!("{}", x.to_string()),
         }
     }
 }
 
-fn sendrequest(mut line: String) -> String {
+fn send_request(line: String) -> String {
     match TcpStream::connect("127.0.0.1:15496") {
         Ok(mut stream) => {
             stream.write(line.as_bytes()).unwrap();
@@ -88,4 +94,32 @@ fn sendrequest(mut line: String) -> String {
             return "offline".to_string();
         }
     };
+}
+
+fn handle_request(request: String) -> String {
+    let mut response = String::new();
+    match request.trim_end_matches('\0') {
+        "Invalid Session ID" => {
+            eprintln!(
+                "Server could not verify the integrity of this connection, and thus terminated it."
+            );
+            process::exit(0);
+        }
+        "Disconnected Successfully" => {
+            eprintln!("Server has terminated the connection.");
+            process::exit(0);
+        }
+        "offline" => {
+            eprintln!("Server unreachable.");
+            process::exit(0);
+        }
+        "Connected Successfully" => {
+            response = "Server successfully handled request.".to_string();
+        }
+        "err" => {
+            response = "Invalid request! Server could not process request.".to_string();
+        }
+        x => response = x.to_string(),
+    }
+    return response;
 }

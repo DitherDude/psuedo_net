@@ -1,6 +1,10 @@
 use magic_crypt::{MagicCryptTrait, new_magic_crypt};
-use rand::rngs::StdRng;
-use rand::{SeedableRng, TryRngCore};
+use rand_new::rngs::StdRng;
+use rand_new::{SeedableRng, TryRngCore};
+use rsa::{
+    RsaPrivateKey, RsaPublicKey,
+    pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey},
+};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 //credit to https://www.youtube.com/watch?v=JiuouCJQzSQ for the tutorial
@@ -13,8 +17,6 @@ fn main() {
     let listener = TcpListener::bind("127.0.0.1:15496")
         .expect("[FATAL] Failed to bind to address. Is port in use?");
     println!("[INFO] Server listening on 127.0.0.1:15496");
-    //
-    //println!("[INFO] Session ID: {}", sessionid.trim_end_matches(':'));
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
@@ -36,7 +38,7 @@ fn handle_connection(mut stream: TcpStream) {
     match String::from_utf8_lossy(&buffer[..]).trim_end_matches('\0') {
         "`" => {
             stream
-                .write(get_sessionid(clientid).as_bytes())
+                .write(gen_sessionid(clientid).as_bytes())
                 .expect("[ERROR] Connected to client, but failed to send session ID.");
         }
         x => {
@@ -47,6 +49,12 @@ fn handle_connection(mut stream: TcpStream) {
                         .write("Disconnected Successfully".as_bytes())
                         .expect("[ERROR] Connected to client, but failed to send response.");
                     println!("[INFO] Client {} forogtten.", clientid);
+                }
+                "foreign" => {
+                    stream
+                        .write("Invalid Session ID".as_bytes())
+                        .expect("[ERROR] Connected to client, but failed to send response.");
+                    println!("[INFO] Unrecognized client {} disconnected.", clientid);
                 }
                 req => {
                     println!("Received request \"{}\" from client!", req);
@@ -61,10 +69,11 @@ fn handle_connection(mut stream: TcpStream) {
     }
 }
 fn decrypt(request: String, sessionid: String) -> String {
-    let mc = new_magic_crypt!(sessionid, 256);
+    let mc = new_magic_crypt!(sessionid.clone(), 256);
+    println!("'{}'", sessionid);
     return match mc.decrypt_base64_to_string(&request) {
         Ok(x) => x,
-        Err(e) => e.to_string(),
+        Err(_) => "foreign".to_string(),
     };
 }
 
@@ -81,18 +90,33 @@ fn get_sessionid(client: String) -> String {
                 .to_string();
         }
     }
+    return "err".to_string();
+}
+
+fn gen_sessionid(client: String) -> String {
+    let mut file = std::fs::File::open("sessionid.txt").unwrap();
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).unwrap();
+    for line in contents.lines() {
+        if line.starts_with(&client) {
+            return "err".to_string();
+        }
+    }
     let mut sessionid = "".to_string();
     for _ in 0..7 {
         sessionid = sessionid
-            + format!("{:X}", StdRng::try_next_u64(&mut StdRng::from_os_rng()).unwrap()).as_str()//.random_range(0..1E100 as u64)).as_str()
+            + format!(
+                "{:X}",
+                StdRng::try_next_u64(&mut StdRng::from_os_rng()).unwrap()
+            )
+            .as_str()
             + ":";
     }
     let sessionid = sessionid.trim_end_matches(':').to_string();
-    contents = contents + "\n" + &client + " " + &sessionid;
+    contents = contents + "\n" + &client + " " + sessionid.as_str();
     file = std::fs::File::create("sessionid.txt").unwrap();
     file.write_all(contents.as_bytes()).unwrap();
     println!("[INFO] New client {} connected.", client);
-    // println!("[INFO] Session ID: {}", sessionid);
     return sessionid;
 }
 
@@ -108,4 +132,19 @@ fn remove_client(client: String) {
     }
     file = std::fs::File::create("sessionid.txt").unwrap();
     file.write_all(new_contents.trim().as_bytes()).unwrap();
+}
+
+fn secure_tunnel() {
+    let mut rng = rand::rngs::OsRng;
+    let bits = 4096;
+    let private_key = RsaPrivateKey::new(&mut rng, bits).unwrap();
+    let public_key = RsaPublicKey::from(&private_key);
+    let priv_str = &private_key
+        .to_pkcs8_pem(rsa::pkcs8::LineEnding::default())
+        .unwrap()
+        .replace("\n", "");
+    let pub_str = public_key
+        .to_public_key_pem(rsa::pkcs8::LineEnding::default())
+        .unwrap()
+        .replace("\n", "");
 }

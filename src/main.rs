@@ -35,7 +35,7 @@ fn handle_connection(mut stream: TcpStream) {
     stream
         .read(&mut buffer)
         .expect("[ERROR] Received connection from client, but lost request.");
-    let response = String::from_utf8_lossy(&buffer[..])
+    let mut response = String::from_utf8_lossy(&buffer[..])
         .trim_end_matches('\0')
         .to_string();
     match response.chars().nth(0).unwrap() {
@@ -44,9 +44,15 @@ fn handle_connection(mut stream: TcpStream) {
                 .write(gen_sessionid(clientid).as_bytes())
                 .expect("[ERROR] Connected to client, but failed to send session ID.");
         }
-        x => {
+        _ => {
+            response = response
+                .char_indices()
+                .nth(1)
+                .and_then(|(i, _)| response.get(i..))
+                .unwrap_or("")
+                .to_string();
             match decrypt(
-                x.to_string().trim_start_matches('b').to_string(),
+                response, //.to_string().trim_start_matches('d').to_string(),
                 get_sessionid(clientid.clone()),
             )
             .as_str()
@@ -78,7 +84,6 @@ fn handle_connection(mut stream: TcpStream) {
 }
 fn decrypt(request: String, sessionid: String) -> String {
     let mc = new_magic_crypt!(sessionid.clone(), 256);
-    println!("'{}'", sessionid);
     return match mc.decrypt_base64_to_string(&request) {
         Ok(x) => x,
         Err(_) => "foreign".to_string(),

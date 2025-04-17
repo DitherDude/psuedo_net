@@ -1,5 +1,8 @@
 use base64::{Engine, engine::general_purpose};
+//use ecdh::SharedSecret;
 use magic_crypt::{MagicCryptTrait, new_magic_crypt};
+use p256::{EncodedPoint, PublicKey, ecdh::EphemeralSecret};
+use rand::rngs::OsRng;
 use rand_new::rngs::StdRng;
 use rand_new::{SeedableRng, TryRngCore};
 use rsa::{
@@ -8,6 +11,7 @@ use rsa::{
 };
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+
 //credit to https://www.youtube.com/watch?v=JiuouCJQzSQ for the tutorial
 
 fn main() {
@@ -36,24 +40,46 @@ fn handle_connection(mut stream: TcpStream) {
     let mut response = String::from_utf8_lossy(&buffer[..])
         .trim_end_matches('\0')
         .to_string();
-    match response.chars().nth(0).unwrap() {
+    let identifier = response.chars().nth(0).unwrap();
+    response = response
+        .char_indices()
+        .nth(1)
+        .and_then(|(i, _)| response.get(i..))
+        .unwrap_or("")
+        .to_string();
+    match identifier {
         '`' => {
+            gen_sessionid(clientid);
             stream
-                .write(gen_sessionid(clientid).as_bytes())
+                .write("err".as_bytes())
                 .expect("[ERROR] Connected to client, but failed to send session ID.");
         }
         '$' => {
+            let rsa_pub_key = std::thread::spawn(move || gen_rsa_key(clientid));
+            let server_secret = EphemeralSecret::random(&mut OsRng);
+            let server_pk_bytes = EncodedPoint::from(server_secret.public_key());
+            let client_public = PublicKey::from_sec1_bytes(
+                &buffer[1..]
+                    .iter()
+                    .rev()
+                    .skip_while(|&x| *x == u8::default())
+                    .collect::<Vec<&u8>>()
+                    .into_iter()
+                    .rev()
+                    .copied()
+                    .collect::<Vec<u8>>(),
+            )
+            .unwrap();
+            let server_shared = server_secret.diffie_hellman(&client_public);
+            let data = general_purpose::STANDARD.encode(server_pk_bytes.as_bytes())
+                + ":"
+                + &new_magic_crypt!(server_shared.raw_secret_bytes(), 256)
+                    .encrypt_str_to_base64(rsa_pub_key.join().unwrap().to_string());
             stream
-                .write(gen_rsa_key(clientid).as_bytes())
-                .expect("[ERROR] Connected to client, but failed to send RSA key.");
+                .write(data.as_bytes())
+                .expect("[ERROR] Connected to client, but failed to send H-D public key.");
         }
         x => {
-            response = response
-                .char_indices()
-                .nth(1)
-                .and_then(|(i, _)| response.get(i..))
-                .unwrap_or("")
-                .to_string();
             let data: String;
             match x {
                 'b' => {
@@ -84,28 +110,34 @@ fn handle_connection(mut stream: TcpStream) {
                             .expect("[ERROR] Connected to client, but failed to send response.");
                     }
                 }
+                //'d' => {}
                 _ => {
                     data = "err".to_string();
                 }
             }
             match data.as_str() {
                 "disconnect" => {
+                    send_encrypted_response(
+                        &stream,
+                        "Disconnected Successfully",
+                        "[ERROR] Connected to client, but failed to send response.",
+                    );
                     remove_client(clientid.clone());
-                    stream
-                        .write("Disconnected Successfully".as_bytes())
-                        .expect("[ERROR] Connected to client, but failed to send response.");
                     println!("[INFO] Client {} forogtten.", clientid);
+                    return;
                 }
                 "foreign" => {
                     stream
                         .write("Invalid Session ID".as_bytes())
                         .expect("[ERROR] Connected to client, but failed to send response.");
                     println!("[INFO] Unrecognized client {} disconnected.", clientid);
+                    return;
                 }
                 _ => {
                     let protocol = match x {
                         'b' => "Salted Base64",
-                        'r' => "RSA-2048",
+                        'r' => "RSA-3072",
+                        'd' => "Diffie-Hellman",
                         _ => "unknown",
                     };
                     println!(
@@ -115,10 +147,12 @@ fn handle_connection(mut stream: TcpStream) {
                 }
             }
 
-            let response = "Connected Successfully".as_bytes();
-            stream
-                .write(response)
-                .expect("[ERROR] Connected to client, but failed to send response.");
+            let response = "Connected Successfully";
+            send_encrypted_response(
+                &stream,
+                response,
+                "[ERROR] Connected to client, but failed to send response.",
+            );
         }
     }
 }
@@ -128,6 +162,13 @@ fn decrypt(request: String, sessionid: String) -> String {
         Ok(x) => x,
         Err(_) => "foreign".to_string(),
     };
+}
+
+fn send_encrypted_response(mut stream: &TcpStream, response: &str, expect: &str) {
+    let sessionid = get_sessionid(stream.peer_addr().unwrap().ip().to_string());
+    let mc = new_magic_crypt!(sessionid.clone(), 256);
+    let encrypted_string = mc.encrypt_str_to_base64(response);
+    stream.write(encrypted_string.as_bytes()).expect(&expect);
 }
 
 fn get_sessionid(client: String) -> String {
@@ -228,7 +269,7 @@ fn gen_rsa_key(client: String) -> String {
         }
     }
     let mut rng = rand::rngs::OsRng;
-    let bits = 2048;
+    let bits = 3072;
     let private_key = RsaPrivateKey::new(&mut rng, bits).unwrap();
     let public_key = RsaPublicKey::from(&private_key);
     let priv_str = &private_key

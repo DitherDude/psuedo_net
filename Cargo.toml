@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 base64 = "0.22.1"
 magic-crypt = "4.0.1"
+p256 = {version = "0.13.2", features = ["ecdh"]}
 rand = "0.8.3"
 rand_new = { git = "https://github.com/rust-random/rand.git", tag = "0.9.0" , package = "rand"}
 rsa = "0.9.8"
